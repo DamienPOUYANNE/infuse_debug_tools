@@ -149,6 +149,19 @@ target_link_libraries(infuse_data_extractor
 	infuse_debug_tools
 )
 
+ ## asn1_bitstream_to_disparity_image
+ add_executable(asn1_bitstream_to_disparity_image_node src/asn1_bitstream_to_disparity_image.cpp)
+ target_include_directories(asn1_bitstream_to_disparity_image_node
+		PUBLIC
+		${Boost_INCLUDE_DIRS}
+		${OpenCV_INCLUDE_DIRS}
+ )
+ target_link_libraries(asn1_bitstream_to_disparity_image_node
+		${Boost_LIBRARIES}
+		${OpenCV_LIBRARIES}
+		infuse_debug_tools
+ )
+
 ## infuse_stereo_matching
 add_executable(infuse_stereo_matching
         src/infuse_stereo_matching.cpp
@@ -183,16 +196,15 @@ target_link_libraries(asn1_bitstream_to_image_node
 	#infuse_asn1_conversions::ros_conversions
 )
 
-## asn1_bitstream_to_disparity_image
-add_executable(asn1_bitstream_to_disparity_image_node src/asn1_bitstream_to_disparity_image.cpp)
-target_include_directories(asn1_bitstream_to_disparity_image_node
-        PUBLIC
-        ${catkin_INCLUDE_DIRS}
+## asn1_bitstream_dataset_cleaner
+add_executable(asn1_bitstream_dataset_cleaner_node src/asn1_bitstream_dataset_cleaner.cpp)
+target_include_directories(asn1_bitstream_dataset_cleaner_node
+               PUBLIC
+               ${Boost_INCLUDE_DIRS}
+               ${OpenCV_INCLUDE_DIRS}
 )
-target_link_libraries(asn1_bitstream_to_disparity_image_node
-        ${catkin_LIBRARIES}
-        infuse_debug_tools
-        infuse_asn1_types::infuse_asn1_types
-        infuse_asn1_conversions::base_conversions
-        ${OpenCV_LIBRARIES}
+target_link_libraries(asn1_bitstream_dataset_cleaner_node
+               ${Boost_LIBRARIES}
+               ${OpenCV_LIBRARIES}
+               infuse_debug_tools
 )

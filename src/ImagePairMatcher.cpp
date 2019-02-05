@@ -1,17 +1,5 @@
 #include "ImagePairMatcher.hpp"
 
-#include <rosbag/bag.h>
-#include <rosbag/view.h>
-
-#include <infuse_asn1_conversions/asn1_base_conversions.hpp>
-#include <infuse_asn1_conversions/asn1_pcl_conversions.hpp>
-
-#include <boost/progress.hpp>
-
-#include <opencv2/opencv.hpp>
-
-#include "asn1_bitstream_logger.hpp"
-
 namespace bfs = boost::filesystem;
 
 namespace infuse_debug_tools {
@@ -27,6 +15,7 @@ ImagePairMatcher::ImagePairMatcher(const std::string &output_dir, const std::vec
     asn1_rect_out_frame_pair_ptr_{std::make_unique<asn1SccFramePair>()},
     out_raw_disparity_ptr_{std::make_unique<asn1SccFrame>()},
     out_color_disparity_ptr_{std::make_unique<asn1SccFrame>()},
+    out_disparity_pointcloud_ptr_{std::make_unique<asn1SccPointcloud>()},
     length_img_filename_{5},
     image_count_{0},
     image_max_{std::stoul(std::string("1") + std::string(length_img_filename_, '0')) - 1}
@@ -36,180 +25,200 @@ ImagePairMatcher::ImagePairMatcher(const std::string &output_dir, const std::vec
 
 void ImagePairMatcher::Match()
 {
-  // Vector of topics used to create a view on the bag
-  std::vector<std::string> topics = {image_topic_};
+    // Vector of topics used to create a view on the bag
+    std::vector<std::string> topics = {image_topic_};
 
-  // Get the number of messages to process
-  size_t n_images = 0;
-  for (auto bag_path : bag_paths_) {
-    rosbag::Bag bag(bag_path); // bagmode::Read by default
-    rosbag::View view(bag, rosbag::TopicQuery(topics));
-    n_images += view.size();
-    bag.close();
-  }
-
-  // Stop here if there's nothing on the topic
-  if (n_images == 0) {
-    std::cout << "Warning: Nothing to extract on topic " << image_topic_ << std::endl;
-    return;
-  }
-
-  // Makes sure the output dir does not already exists
-  if (bfs::exists(output_dir_)) {
-    std::stringstream ss;
-    if (bfs::is_directory(output_dir_))
-      ss << "A directory named \"" << output_dir_.string() << "\" already exists. Please remove it or choose another directory to output the point clouds.";
-    else if (bfs::is_regular_file(output_dir_))
-      ss << "A regular file named \"" << output_dir_.string() << "\" already exists. Please remove this file or choose another directory name to output the point clouds.";
-    else
-      ss << "\"" << output_dir_.string() << "\" already exists. Please remove it or choose another directory name to output the point clouds.";
-    throw std::runtime_error(ss.str());
-  }
-
-  // Lambda function that creates a directory (or subdir inside dir if specified).
-  auto lambda_create_subdir = [](bfs::path dir, std::string subdir = "") -> bfs::path {
-    bfs::path dirpath = dir / subdir;
-    bool dir_created = bfs::create_directory(dirpath);
-    if (not dir_created) {
-      std::stringstream ss;
-      ss << "Could not create \"" << dirpath.string() << "\" directory.";
-      throw std::runtime_error(ss.str());
-    }
-    return dirpath;
-  };
-  // Create output dir
-  lambda_create_subdir(output_dir_);
-  // Create subdirs
-  disparity_data_dir_       = lambda_create_subdir(output_dir_,   "data");
-  disparity_metadata_dir_   = lambda_create_subdir(output_dir_,   "metadata");
-
-  // Fill metadata names vector
-  std::vector<std::string> metadata_names;
-  metadata_names.push_back("left_timestamp");
-  metadata_names.push_back("right_timestamp");
-  metadata_names.push_back("number_paired_pixels");
-  metadata_names.push_back("percentage_of_paired_pixels");
-
-  // Write dataformat files. The rationalle of keeping the dataformat
-  // separated from the metadata is that this way it is possible to associate
-  // the cloud number with the line in the metadata file.
-  // We do it using a lambda function.
-  auto lambda_create_dataformat_file = [](bfs::path dir, std::string file_prefix, const std::vector<std::string> & entries) -> void {
-    std::ofstream dataformat_ofs((dir / (file_prefix + "dataformat.txt")).string());
-    unsigned int index = 1;
-    for (auto entry : entries) {
-      dataformat_ofs << "# " << std::setw(2) << index << " - " << entry << '\n';
-      index++;
-    }
-    dataformat_ofs.close();
-  };
-  lambda_create_dataformat_file(output_dir_, "disparity_", metadata_names);
-
-  // Setup metadata file
-  disparity_metadata_ofs_.open((output_dir_ / "disparity_all_metadata.txt").string());
-
-  // Setup progress display
-  std::cout << "Extracting " << n_images << " image pairs to " << output_dir_.string() << "/...";
-  boost::progress_display show_progress( n_images );
-
-  // Loop over bags
-  for (auto bag_path : bag_paths_) {
-    rosbag::Bag bag(bag_path); // bagmode::Read by default
-    // Create a view of the bag with the selected topics only
-    rosbag::View view(bag, rosbag::TopicQuery(topics));
-
-    try {
-      // Loop over messages in each view
-      for (rosbag::MessageInstance const m: view) {
-        infuse_msgs::asn1_bitstream::Ptr i = m.instantiate<infuse_msgs::asn1_bitstream>();
-        if (i != nullptr) {
-          ProcessImagePair(i);
-          ++show_progress; // Update progress display
-        } else throw std::runtime_error("Could not instantiate an infuse_msgs::asn1_bitstream message!");
-      } // for msgs in view
-    } catch (...) {
-      // Assure the bags are closed if something goes wrong and re-trhow
-      bag.close();
-      throw;
+    // Get the number of messages to process
+    size_t n_images = 0;
+    for (auto bag_path : bag_paths_)
+    {
+        rosbag::Bag bag(bag_path); // bagmode::Read by default
+        rosbag::View view(bag, rosbag::TopicQuery(topics));
+        n_images += view.size();
+        bag.close();
     }
 
-    bag.close();
-  } // for bags
+    // Stop here if there's nothing on the topic
+    if (n_images == 0)
+    {
+        std::cout << "Warning: Nothing to extract on topic " << image_topic_ << std::endl;
+        return;
+    }
 
-  // metadata_ofs_.close();
+    // Makes sure the output dir does not already exists
+    if (bfs::exists(output_dir_))
+    {
+        std::stringstream ss;
+        if (bfs::is_directory(output_dir_))
+            ss << "A directory named \"" << output_dir_.string() << "\" already exists. Please remove it or choose another directory to output the point clouds.";
+        else if (bfs::is_regular_file(output_dir_))
+            ss << "A regular file named \"" << output_dir_.string() << "\" already exists. Please remove this file or choose another directory name to output the point clouds.";
+        else
+            ss << "\"" << output_dir_.string() << "\" already exists. Please remove it or choose another directory name to output the point clouds.";
+        throw std::runtime_error(ss.str());
+    }
+
+    // Lambda function that creates a directory (or subdir inside dir if specified).
+    auto lambda_create_subdir = [](bfs::path dir, std::string subdir = "") -> bfs::path
+    {
+        bfs::path dirpath = dir / subdir;
+        bool dir_created = bfs::create_directory(dirpath);
+        if (not dir_created)
+        {
+          std::stringstream ss;
+          ss << "Could not create \"" << dirpath.string() << "\" directory.";
+          throw std::runtime_error(ss.str());
+        }
+        return dirpath;
+    };
+
+    // Create output dir
+    lambda_create_subdir(output_dir_);
+
+    // Create subdirs
+    disparity_data_dir_       = lambda_create_subdir(output_dir_,   "data");
+    disparity_images_dir_     = lambda_create_subdir(disparity_data_dir_,   "images");
+    disparity_pointclouds_dir_ = lambda_create_subdir(disparity_data_dir_,   "pointclouds");
+    disparity_metadata_dir_   = lambda_create_subdir(output_dir_,   "metadata");
+
+    // Fill metadata names vector
+    std::vector<std::string> metadata_names;
+    metadata_names.push_back("left_timestamp");
+    metadata_names.push_back("right_timestamp");
+    metadata_names.push_back("number_paired_pixels");
+    metadata_names.push_back("percentage_of_paired_pixels");
+
+    // Write dataformat files. The rationalle of keeping the dataformat
+    // separated from the metadata is that this way it is possible to associate
+    // the cloud number with the line in the metadata file.
+    // We do it using a lambda function.
+    auto lambda_create_dataformat_file = [](bfs::path dir, std::string file_prefix, const std::vector<std::string> & entries) -> void {
+        std::ofstream dataformat_ofs((dir / (file_prefix + "dataformat.txt")).string());
+        unsigned int index = 1;
+
+        for (auto entry : entries)
+        {
+          dataformat_ofs << "# " << std::setw(2) << index << " - " << entry << '\n';
+          index++;
+        }
+        dataformat_ofs.close();
+    };
+    lambda_create_dataformat_file(output_dir_, "disparity_", metadata_names);
+
+    // Setup metadata file
+    disparity_metadata_ofs_.open((output_dir_ / "disparity_all_metadata.txt").string());
+
+    // Setup progress display
+    std::cout << "Extracting " << n_images << " image pairs to " << output_dir_.string() << "/...";
+    boost::progress_display show_progress( n_images );
+
+    // Loop over bags
+    for (auto bag_path : bag_paths_)
+    {
+        rosbag::Bag bag(bag_path); // bagmode::Read by default
+        // Create a view of the bag with the selected topics only
+        rosbag::View view(bag, rosbag::TopicQuery(topics));
+
+        try {
+          // Loop over messages in each view
+          for (rosbag::MessageInstance const m: view) {
+            infuse_msgs::asn1_bitstream::Ptr i = m.instantiate<infuse_msgs::asn1_bitstream>();
+            if (i != nullptr) {
+              ProcessImagePair(i);
+              ++show_progress; // Update progress display
+            } else throw std::runtime_error("Could not instantiate an infuse_msgs::asn1_bitstream message!");
+          } // for msgs in view
+        } catch (...) {
+          // Assure the bags are closed if something goes wrong and re-trhow
+          bag.close();
+          throw;
+        }
+
+        bag.close();
+    } // for bags
+
+    // metadata_ofs_.close();
 
 }
 
 void ImagePairMatcher::ProcessImagePair(const infuse_msgs::asn1_bitstream::Ptr& msg)
 {
-  // Guard against overflow on the filename numbers
-  if (image_count_ > image_max_)
-    throw std::runtime_error("Overflow on the image filename counter. Please increase the number of characters to be used to compose the filename");
+    // Guard against overflow on the filename numbers
+    if (image_count_ > image_max_)
+        throw std::runtime_error("Overflow on the image filename counter. Please increase the number of characters to be used to compose the filename");
 
-  // Initialize asn1 point cloud to be sure we have clean object.
-  asn1SccFramePair_Initialize(asn1_frame_pair_ptr_.get());
+    // Initialize asn1 point cloud to be sure we have clean object.
+    asn1SccFramePair_Initialize(asn1_frame_pair_ptr_.get());
 
-  // Decode
-  flag res;
-  int errorCode;
-  BitStream bstream;
-  BitStream_AttachBuffer(&bstream, msg->data.data(), msg->data.size());
-  res = asn1SccFramePair_Decode(asn1_frame_pair_ptr_.get(), &bstream, &errorCode);
-  if (not res) {
-    std::stringstream ss;
-    ss << "Error decoding asn1SccFramePair! Error: " << errorCode << "\n";
-    throw std::runtime_error(ss.str());
-  }
+    // Decode
+    flag res;
+    int errorCode;
+    BitStream bstream;
+    BitStream_AttachBuffer(&bstream, msg->data.data(), msg->data.size());
+    res = asn1SccFramePair_Decode(asn1_frame_pair_ptr_.get(), &bstream, &errorCode);
 
-  // Process stereo matching
-  std::vector<std::string> metadata_values;
-  ProcessStereoMatching(*asn1_frame_pair_ptr_, *out_raw_disparity_ptr_, *out_color_disparity_ptr_, metadata_values);
-
-  // Write images
-//  ProcessImage(*out_raw_disparity_ptr_, disparity_data_dir_);
-  ProcessImage(*out_color_disparity_ptr_, disparity_data_dir_);
-
-  // Write all_metadata files
-  for(std::vector<int>::size_type i = 0; i != metadata_values.size(); i++) {
-      disparity_metadata_ofs_ << metadata_values.at(i) << " ";
-  }
-  disparity_metadata_ofs_ << '\n';
-
-  // Lambda function to dump metadata from map
-  auto lambda_log_metadata_on_file = [this](bfs::path metadata_dir, std::vector<std::string> metadata_values) -> void {
-    // Compose output filename
-    std::string filename = std::to_string(this->image_count_);
-    filename = std::string(this->length_img_filename_ - filename.length(), '0') + filename + ".txt";
-    bfs::path metadata_path = metadata_dir / filename;
-
-    // Write the metadata file
-    std::ofstream img_metadata_ofs(metadata_path.string());
-    for(std::vector<int>::size_type i = 0; i != metadata_values.size(); i++) {
-        img_metadata_ofs << metadata_values.at(i) << " ";
+    if (not res)
+    {
+        std::stringstream ss;
+        ss << "Error decoding asn1SccFramePair! Error: " << errorCode << "\n";
+        throw std::runtime_error(ss.str());
     }
-    img_metadata_ofs.close();
 
-  };
-  // Dump metadata of frames in a separated files
-  lambda_log_metadata_on_file(disparity_metadata_dir_, metadata_values);
+    // Process stereo matching
+    std::vector<std::string> metadata_values;
+    ProcessStereoMatching(*asn1_frame_pair_ptr_, *out_raw_disparity_ptr_, *out_color_disparity_ptr_, metadata_values);
 
-  image_count_++;
+    // Write images
+    ProcessImage(*out_color_disparity_ptr_, disparity_images_dir_);
+
+    // Write disparity pointcloud
+    ProcessPointCloudExport(*out_raw_disparity_ptr_, *asn1_rect_out_frame_pair_ptr_, *out_disparity_pointcloud_ptr_, disparity_pointclouds_dir_);
+
+    // Write all_metadata files
+    for(std::vector<int>::size_type i = 0; i != metadata_values.size(); i++)
+    {
+      disparity_metadata_ofs_ << metadata_values.at(i) << " ";
+    }
+    disparity_metadata_ofs_ << '\n';
+
+    // Lambda function to dump metadata from map
+    auto lambda_log_metadata_on_file = [this](bfs::path metadata_dir, std::vector<std::string> metadata_values) -> void {
+        // Compose output filename
+        std::string filename = std::to_string(this->image_count_);
+        filename = std::string(this->length_img_filename_ - filename.length(), '0') + filename + ".txt";
+        bfs::path metadata_path = metadata_dir / filename;
+
+        // Write the metadata file
+        std::ofstream img_metadata_ofs(metadata_path.string());
+        for(std::vector<int>::size_type i = 0; i != metadata_values.size(); i++)
+        {
+            img_metadata_ofs << metadata_values.at(i) << " ";
+        }
+
+        img_metadata_ofs.close();
+
+    };
+
+    // Dump metadata of frames in a separated files
+    lambda_log_metadata_on_file(disparity_metadata_dir_, metadata_values);
+
+    image_count_++;
 }
 
 void ImagePairMatcher::ProcessImage(asn1SccFrame & asn1_frame, boost::filesystem::path data_dir)
 {
-  // Bind to the pointer inside the asn1 variable
-  cv::Mat img( asn1_frame.data.rows, asn1_frame.data.cols,
+    // Bind to the pointer inside the asn1 variable
+    cv::Mat img( asn1_frame.data.rows, asn1_frame.data.cols,
     CV_MAKETYPE((int)(asn1_frame.data.depth), asn1_frame.data.channels),
     asn1_frame.data.data.arr, asn1_frame.data.rowSize);
 
-  // Compose output filename
-  std::string img_filename = std::to_string(image_count_);
-  img_filename = std::string(length_img_filename_ - img_filename.length(), '0') + img_filename + "." + img_extension_;
-  bfs::path img_path = data_dir / img_filename;
+    // Compose output filename
+    std::string img_filename = std::to_string(image_count_);
+    img_filename = std::string(length_img_filename_ - img_filename.length(), '0') + img_filename + "." + img_extension_;
+    bfs::path img_path = data_dir / img_filename;
 
-  // save the file
-  cv::imwrite(img_path.string(), img);
+    // save the file
+    cv::imwrite(img_path.string(), img);
 }
 
 void ImagePairMatcher::ProcessStereoMatching(asn1SccFramePair& in_frame_pair, asn1SccFrame& out_raw_disparity, asn1SccFrame& out_color_disparity, std::vector<std::string> & metadata_values)
@@ -487,6 +496,7 @@ void ImagePairMatcher::ProcessStereoRectification(asn1SccFramePair& in_original_
             cv::Mat1d RRight;
             cv::Mat1d Q;
 
+
             cv::stereoRectify(camera_matrix_L, dist_coeffs_L, camera_matrix_R, dist_coeffs_R, image_size, R, T, RLeft, RRight, _PLeft, _PRight, Q, CV_CALIB_ZERO_DISPARITY, _scaling, newSize);
 
             cv::initUndistortRectifyMap(camera_matrix_L, dist_coeffs_L, RLeft, _PLeft, newSize, CV_32F, _lmapx, _lmapy);
@@ -576,5 +586,144 @@ void ImagePairMatcher::ProcessStereoRectification(asn1SccFramePair& in_original_
     }
 }
 
+void ImagePairMatcher::ProcessPointCloudExport(asn1SccFrame &in_disp_image, asn1SccFramePair &in_intensity_image, asn1SccPointcloud &out_pointcloud, boost::filesystem::path data_dir)
+{
+    pcl::PointCloud<pcl::PointXYZI> cloud;
+
+    switch (in_disp_image.data.depth)
+    {
+        case asn1Sccdepth_8U:
+        {
+            disp2ptcloudwithintensity<unsigned char>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+        case asn1Sccdepth_8S:
+        {
+            disp2ptcloudwithintensity<char>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+        case asn1Sccdepth_16U:
+        {
+            disp2ptcloudwithintensity<unsigned short int>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+        case asn1Sccdepth_16S:
+        {
+            disp2ptcloudwithintensity<short int>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+        case asn1Sccdepth_32S:
+        {
+            disp2ptcloudwithintensity<int>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+        case asn1Sccdepth_32F:
+        {
+            disp2ptcloudwithintensity<float>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+        case asn1Sccdepth_64F:
+        {
+            disp2ptcloudwithintensity<double>(in_disp_image, in_intensity_image.left, out_pointcloud);
+            break;
+        }
+    }
+
+    // Fill in the cloud data
+    cloud.width    = out_pointcloud.metadata.width;
+    cloud.height   = out_pointcloud.metadata.height;
+    cloud.points.resize (cloud.width * cloud.height);
+
+    for (size_t i = 0; i < cloud.points.size (); ++i)
+    {
+        cloud.points[i].x = out_pointcloud.data.points.arr[i].arr[0];
+        cloud.points[i].y = out_pointcloud.data.points.arr[i].arr[1];
+        cloud.points[i].z = out_pointcloud.data.points.arr[i].arr[2];
+        cloud.points[i].intensity = static_cast<float>(out_pointcloud.data.intensity.arr[i]);
+    }
+
+    // Compose output filename
+    std::string ptcloud_filename = std::to_string(image_count_);
+    ptcloud_filename = std::string(length_img_filename_ - ptcloud_filename.length(), '0') + ptcloud_filename + ".pcd";
+    bfs::path ptcloud_path = data_dir / ptcloud_filename;
+
+    // Save pointcloud into PCD file
+    pcl::io::savePCDFileASCII (ptcloud_path.string(), cloud);
+
+}
+
+template <typename T>
+bool ImagePairMatcher::disp2ptcloudwithintensity(asn1SccFrame &disp, asn1SccFrame &img, asn1SccPointcloud &pt_cloud)
+{
+    if (disp.metadata.pixelModel != asn1Sccpix_DISP)
+    {
+        std::cout << "DisparityToPointcloud: Bad input data" << std::endl;
+        return false;
+    }
+    else if (img.data.rows != disp.data.rows || img.data.cols != disp.data.cols)
+    {
+        std::cout << "DisparityToPointcloud: Disparity and Intensity images must have the same size" << std::endl;
+        std::cout << img.data.rows << " " << disp.data.rows << " " << img.data.cols << " " << disp.data.cols << std::endl;
+
+        return false;
+    }
+    else if (img.data.depth != asn1Sccdepth_8U)
+    {
+        std::cout << "DisparityToPointcloud: Intensity image's depth must be 8U " << std::endl;
+
+        return false;
+    }
+
+    if ((disp.data.rows * disp.data.cols) > maxPointcloudSize)
+    {
+        std::cout << "DisparityToPointcloud: Too many pixels to reproject, image needs to be degraded first" << std::endl;
+
+        return false;
+    }
+
+    pt_cloud.metadata.msgVersion = pointCloud_Version;
+    pt_cloud.metadata.sensorId = disp.intrinsic.sensorId;
+    pt_cloud.metadata.frameId = disp.extrinsic.pose_robotFrame_sensorFrame.metadata.childFrameId;
+    pt_cloud.metadata.timeStamp = disp.metadata.timeStamp;
+    pt_cloud.metadata.isRegistered = false;
+    pt_cloud.metadata.isOrdered = true;
+    pt_cloud.metadata.height = disp.data.rows;
+    pt_cloud.metadata.width = disp.data.cols;
+    pt_cloud.metadata.hasFixedTransform = disp.extrinsic.hasFixedTransform;
+    pt_cloud.metadata.pose_robotFrame_sensorFrame = disp.extrinsic.pose_robotFrame_sensorFrame;
+    pt_cloud.metadata.pose_fixedFrame_robotFrame = disp.extrinsic.pose_fixedFrame_robotFrame;
+    pt_cloud.data.colors.nCount = 0;
+
+    cv::Mat tmp_disp(static_cast<int>(disp.data.rows), static_cast<int>(disp.data.cols), CV_MAKETYPE(static_cast<int>(disp.data.depth), static_cast<int>(disp.data.channels)), disp.data.data.arr, disp.data.rowSize);
+    cv::Mat tmp_intensity(static_cast<int>(img.data.rows), static_cast<int>(img.data.cols), CV_MAKETYPE(static_cast<int>(img.data.depth), static_cast<int>(img.data.channels)), img.data.data.arr, img.data.rowSize);
+
+    pt_cloud.data.points.nCount = 0;
+
+    for (int i = 0; i < tmp_disp.rows; i++)
+    {
+        for (int j = 0; j < tmp_disp.cols; j++)
+        {
+            if(tmp_disp.at<int16_t>(i, j) <= 0)
+                continue;
+
+            pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[2] = (disp.metadata.pixelCoeffs.arr[2] * disp.intrinsic.cameraMatrix.arr[0].arr[0]) / ((tmp_disp.at<T>(i, j) * disp.metadata.pixelCoeffs.arr[0]) + disp.metadata.pixelCoeffs.arr[1]);
+            pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[0] = ((j - disp.intrinsic.cameraMatrix.arr[0].arr[2]) / disp.intrinsic.cameraMatrix.arr[0].arr[0]) * pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[2];
+            pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[1] = ((i - disp.intrinsic.cameraMatrix.arr[1].arr[2]) / disp.intrinsic.cameraMatrix.arr[1].arr[1]) * pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[2];
+
+            pt_cloud.data.intensity.arr[pt_cloud.data.points.nCount] = static_cast<asn1SccT_Int32>(tmp_intensity.at<unsigned char>(i, j));
+
+            if (std::isinf(pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[0]) || std::isinf(pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[1]) || std::isinf(pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[2]))
+            {
+                pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[2] = 0;
+                pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[0] = 0;
+                pt_cloud.data.points.arr[pt_cloud.data.points.nCount].arr[1] = 0;
+            }
+            pt_cloud.data.points.nCount++;
+            pt_cloud.data.intensity.nCount = pt_cloud.data.points.nCount;
+        }
+    }
+
+    return true;
+}
 } // infuse_debug_tools
 

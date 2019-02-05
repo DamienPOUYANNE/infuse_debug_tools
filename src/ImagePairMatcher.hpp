@@ -6,17 +6,28 @@
 #include <memory>
 #include <fstream>
 
+#include <rosbag/bag.h>
+#include <rosbag/view.h>
+
+#include "asn1_bitstream_logger.hpp"
 #include <infuse_msgs/asn1_bitstream.h>
 #include <infuse_asn1_types/Frame.h>
+#include <infuse_asn1_conversions/asn1_base_conversions.hpp>
+#include <infuse_asn1_conversions/asn1_pcl_conversions.hpp>
 
+#include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/highgui/highgui.hpp>
-
 #if WITH_XIMGPROC
 #include <opencv2/ximgproc.hpp>
 #endif
 
+#include <boost/progress.hpp>
 #include <boost/filesystem.hpp>
+
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+
 
 namespace infuse_debug_tools {
 
@@ -226,6 +237,10 @@ private:
   void ProcessImage(asn1SccFrame & asn1_frame, boost::filesystem::path data_dir);
   void ProcessStereoMatching(asn1SccFramePair& in_frame_pair, asn1SccFrame& out_raw_disparity, asn1SccFrame& out_color_disparity, std::vector<std::string> & metadata_values);
   void ProcessStereoRectification(asn1SccFramePair& in_original_stereo_pair, asn1SccFramePair& out_rectified_stereo_pair, cv::Mat & out_rect_left, cv::Mat & out_rect_right);
+  void ProcessPointCloudExport(asn1SccFrame &in_disp_image, asn1SccFramePair &in_intensity_image, asn1SccPointcloud &out_pointcloud, boost::filesystem::path data_dir);
+
+  template <typename T>
+  bool disp2ptcloudwithintensity(asn1SccFrame &disp, asn1SccFrame &img, asn1SccPointcloud &pt_cloud);
 
 private:
   //! Directory where to put the dataset
@@ -237,6 +252,8 @@ private:
   //! Directories where to put the image files (set on Extract())
   boost::filesystem::path disparity_dir_;
   boost::filesystem::path disparity_data_dir_;
+  boost::filesystem::path disparity_images_dir_;
+  boost::filesystem::path disparity_pointclouds_dir_;
   boost::filesystem::path disparity_metadata_dir_;
   //! Variable used to decode the ASN1 message into.
   std::unique_ptr<asn1SccFramePair> asn1_frame_pair_ptr_;
@@ -244,6 +261,8 @@ private:
   std::unique_ptr<asn1SccFrame> out_raw_disparity_ptr_;
   //! Variable used to point to output colored disparity image.
   std::unique_ptr<asn1SccFrame> out_color_disparity_ptr_;
+  //! Variable used to point to output disparity pointcloud.
+  std::unique_ptr<asn1SccPointcloud> out_disparity_pointcloud_ptr_;
 
   //! Number of characters to be used when creating pcd filename
   unsigned int length_img_filename_;
