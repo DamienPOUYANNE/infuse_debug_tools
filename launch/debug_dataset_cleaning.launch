@@ -1,0 +1,18 @@
+<launch>
+
+  <!-- Arguments -->
+  <arg name="output_path" doc="absolute output path"/>
+  <arg name="topics_to_connect" doc="images pair topic to connect"/>
+  <arg name="calibration_file_path" doc="absolute path to calibration file"/>
+
+
+<!-- Nodes execution -->
+  <node pkg="rosbag" type="record" name="recorder" output="screen" args="-a -o $(arg output_path)/cleaned_bag --split --size=512 -x $(arg topics_to_connect)"/>
+
+  <!-- Nodes execution -->
+  <node pkg="infuse_debug_tools" name="asn1_bitstream_disparity_cleaner" type="asn1_bitstream_disparity_cleaner_node" output="screen">
+    <param name="topics_to_connect" value="$(arg topics_to_connect)" />
+    <param name="calibration_file_path" value="$(arg calibration_file_path)" />
+  </node>
+
+</launch>
