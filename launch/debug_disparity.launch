@@ -7,7 +7,7 @@
   <!-- Nodes execution -->
   <node pkg="rosbag" type="play" name="player" output="screen" args="$(arg bag) "/>
 
-  <node pkg="infuse_debug_tools" name="stereo_matching" type="stereo_matching_node" output="screen">
+  <node pkg="infuse_debug_tools" name="asn1_bitstream_to_disparity_image" type="asn1_bitstream_to_disparity_image_node" output="screen">
     <param name="topics_to_connect" value="$(arg topics_to_connect)" />
   </node>
 

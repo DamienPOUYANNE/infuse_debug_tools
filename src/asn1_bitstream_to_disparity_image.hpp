@@ -5,6 +5,7 @@
 
 #include <boost/filesystem.hpp>
 
+#include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
@@ -20,23 +21,36 @@
 
 #include <sensor_msgs/Image.h>
 
+#include <Eigen/Core>
+
 namespace infuse_debug_tools {
-    class StereoMatching
+    class Asn1BitstreamToDisparity
     {
         public:
 
             /**
                 Constructor
             */
-            StereoMatching();
+            Asn1BitstreamToDisparity();
 
             /**
                 Process stereo matching between two images and calculate the disparity image.
 
                 @param image pair to compare
                 @param output disparity image
+                @param output colored disparity image
             */
-            void process_stereo_matching(asn1SccFramePair& in_frame_pair, asn1SccFrame& out_raw_disparity);
+            void process_stereo_matching(asn1SccFramePair& in_frame_pair, asn1SccFrame& out_raw_disparity, asn1SccFrame& out_color_disparity);
+
+            /**
+                Process images rectification for each pair.
+
+                @param image pair to rectify
+                @param output asn1 rectified pair
+                @param left rectified image in cv::Mat format
+                @param right rectified image in cv::Mat format
+            */
+            void process_stereo_rectification(asn1SccFramePair& in_original_stereo_pair, asn1SccFramePair& out_rectified_stereo_pair, cv::Mat & out_rect_left, cv::Mat & out_rect_right);
 
             /**
                 Connect image topic
@@ -212,6 +226,37 @@ namespace infuse_debug_tools {
                 double sigma_color;
             };
 
+            struct StereoRectificationParams
+            {
+                /**
+                 * @brief Degradation ratio to be applied over the x-axis
+                 */
+                int xratio;
+
+                /**
+                 * @brief Degradation ratio to be applied over the y-axis
+                 */
+                int yratio;
+
+                /**
+                 * @brief Free scaling parameter
+                 * If it is -1, the function performs the default scaling.
+                 * Otherwise, the parameter should be between 0 and 1.
+                 * Scaling=0 means that the rectified images are zoomed and shifted so that only valid pixels are visible (no black areas after rectification).
+                 * Scaling=1 means that the rectified image is decimated and shifted so that all the pixels from the original images from the cameras are retained in the rectified images (no source image pixels are lost).
+                 * Obviously, any intermediate value yields an intermediate result between those two extreme cases.
+                 */
+                double scaling;
+
+                /**
+                 * @brief Path to the calibration file
+                 * The calibration file should be named "sensorIDLeft-sensorIDRight.yml"
+                 * If this file is located in "/path/to/calibration/sensorIDLeft-sensorIDRight.yaml",
+                 * then this parameter should be "/path/to/calibration"
+                 */
+                std::string calibration_file_path;
+            };
+
             struct StereoMatchingParams
             {
                 stereoMatcherParams stereo_matcher;
@@ -220,7 +265,8 @@ namespace infuse_debug_tools {
                 #endif
             };
 
-            StereoMatchingParams parameters;
+            StereoMatchingParams matching_parameters_;
+            StereoRectificationParams rect_parameters_;
 
         private:
             // Node Handlers
@@ -248,6 +294,40 @@ namespace infuse_debug_tools {
 
             // Output asn1 disparity image
             std::unique_ptr<asn1SccFrame> out_raw_disparity_ptr_;
+            // Output asn1 colored disparity image
+            std::unique_ptr<asn1SccFrame> out_color_disparity_ptr_;
+
+            // Variable used to decode the ASN1 message into.
+            std::unique_ptr<asn1SccFramePair> asn1_rect_out_frame_pair_ptr_;
+
+            // Sensors id
+            std::string _sensor_id_left;
+            std::string _sensor_id_right;
+            // Path of the calibration file
+            std::string _calibration_file_path;
+
+            // Degradation ratio to be applied over the x-axis
+            int _xratio;
+            // Degradation ratio to be applied over the y-axis
+            int _yratio;
+            // Free scaling parameter
+            double _scaling;
+
+            // Check initialisation
+            bool _initialized;
+
+            // First output map for image left rectification
+            cv::Mat _lmapx;
+            // Second output map for image left rectification
+            cv::Mat _lmapy;
+            // First output map for image right rectification
+            cv::Mat _rmapx;
+            // Second output map for image left rectification
+            cv::Mat _rmapy;
+
+            cv::Mat1d _PLeft;
+            cv::Mat1d _PRight;
+            double _baseline;
     };
 } // infuse_debug_tools
 
