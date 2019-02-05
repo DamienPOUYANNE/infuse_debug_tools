@@ -1,0 +1,15 @@
+<launch>
+
+  <!-- Arguments -->
+  <arg name="input_rosbag" doc="absolute input rosbag path"/>
+  <arg name="output_path" doc="absolute output path"/>
+  <arg name="topics_to_change" doc="topic name to change"/>
+  <arg name="new_name" doc="new topic name"/>
+
+
+<!-- Nodes execution -->
+  <node pkg="rosbag" type="record" name="recorder" output="screen" args="-a -o $(arg output_path)/my_bag --split --size=512"/>
+
+  <node pkg="rosbag" type="play" name="player" output="screen" args="$(arg input_rosbag) $(arg topics_to_change):=$(arg new_name)"/>
+
+</launch>
